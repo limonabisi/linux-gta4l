@@ -28,6 +28,34 @@
 		serial0 = &uart4;
 	};
 
+	battery: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion-polymer";
+		charge-full-design-microamp-hours = <7040000>;
+		voltage-min-design-microvolt = <3400000>;
+		voltage-max-design-microvolt = <4400000>;
+		/* Estimate; the stock profile describes it with tables instead */
+		factory-internal-resistance-micro-ohms = <80000>;
+
+		/* Stock "P85943-QRD-SCUD-ATL-4V4-7040mAh" profile at 25 degrees */
+		ocv-capacity-celsius = <25>;
+		ocv-capacity-table-0 =
+			<4377700 100>, <4356100 98>, <4332300 96>, <4308500 94>,
+			<4284700 92>, <4260800 90>, <4237400 88>, <4214300 86>,
+			<4191400 84>, <4168600 82>, <4146200 80>, <4124600 78>,
+			<4103500 76>, <4083000 74>, <4062700 72>, <4043200 70>,
+			<4024600 68>, <4006700 66>, <3990000 64>, <3975500 62>,
+			<3959500 60>, <3936300 58>, <3909600 56>, <3890700 54>,
+			<3877400 52>, <3866700 50>, <3858100 48>, <3851000 46>,
+			<3843600 44>, <3836000 42>, <3829100 40>, <3823300 38>,
+			<3818200 36>, <3813600 34>, <3809800 32>, <3805900 30>,
+			<3801900 28>, <3797700 26>, <3791500 24>, <3782300 22>,
+			<3771500 20>, <3759800 18>, <3746300 16>, <3729700 14>,
+			<3714900 12>, <3706400 10>, <3704000 9>, <3702500 8>,
+			<3700600 7>, <3696000 6>, <3671900 5>, <3628200 4>,
+			<3570500 3>, <3491700 2>, <3369000 1>, <3000000 0>;
+	};
+
 	chosen {
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -166,6 +194,11 @@
 };
 
 &mdss_dsi0_phy {
+	status = "okay";
+};
+
+&pmi632_qg {
+	monitored-battery = <&battery>;
 	status = "okay";
 };
 
