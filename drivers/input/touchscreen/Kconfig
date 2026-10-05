@@ -701,6 +701,24 @@ config TOUCHSCREEN_NOVATEK_NVT_TS
 	  To compile this driver as a module, choose M here: the
 	  module will be called novatek-nvt-ts.
 
+config TOUCHSCREEN_NOVATEK_NT36523_SPI
+	tristate "Novatek NT36523 SPI touchscreen support"
+	depends on SPI_MASTER
+	depends on DRM || !DRM
+	select FW_LOADER
+	help
+	  Say Y here if you have a Novatek NT36523 touch and display
+	  driver integration (TDDI) panel whose touch part is connected
+	  over SPI, as found in the Samsung Galaxy Tab A7 10.4 (2020).
+
+	  The controller needs a firmware image that the driver loads
+	  each time the panel is powered on.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called novatek-nt36523-spi.
+
 config TOUCHSCREEN_IMAGIS
 	tristate "Imagis touchscreen support"
 	depends on I2C

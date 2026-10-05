@@ -261,6 +261,11 @@
 	status = "okay";
 };
 
+&qup_spi0_default {
+	drive-strength = <6>;
+	bias-disable;
+};
+
 &qupv3_id_0 {
 	status = "okay";
 };
@@ -457,8 +462,34 @@
 	status = "okay";
 };
 
+&spi0 {
+	status = "okay";
+
+	touchscreen@0 {
+		compatible = "novatek,nt36523-spi";
+		reg = <0>;
+		spi-max-frequency = <9600000>;
+
+		interrupts-extended = <&tlmm 80 IRQ_TYPE_EDGE_RISING>;
+
+		pinctrl-0 = <&ts_int_n>;
+		pinctrl-names = "default";
+
+		/* The touch firmware is lost whenever the panel is reset */
+		panel = <&panel>;
+		firmware-name = "novatek_ts_fw_lide_hsd.bin";
+
+		touchscreen-size-x = <1200>;
+		touchscreen-size-y = <2000>;
+	};
+};
+
 &tlmm {
-	gpio-reserved-ranges = <0 4>, <14 4>;
+	/*
+	 * GPIO 0-3 carry the touchscreen SPI bus (QUP0) on this board and
+	 * are driven by the stock kernel, so they are not reserved here.
+	 */
+	gpio-reserved-ranges = <14 4>;
 
 	uart3_default: uart3-default-state {
 		cts-pins {
