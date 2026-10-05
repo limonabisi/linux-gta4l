@@ -228,6 +228,10 @@
 	status = "okay";
 };
 
+&qupv3_id_0 {
+	status = "okay";
+};
+
 &remoteproc_adsp {
 	firmware-name = "qcom/sm6115/Samsung/gta4l/adsp.mbn";
 	status = "okay";
@@ -452,8 +456,8 @@
 	};
 };
 
+/* Debug UART (ttyMSM0, 115200n8), the same port the bootloader logs to */
 &uart4 {
-	compatible = "qcom,geni-uart";
 	status = "okay";
 };
 
