@@ -427,6 +427,72 @@
 &tlmm {
 	gpio-reserved-ranges = <0 4>, <14 4>;
 
+	uart3_default: uart3-default-state {
+		cts-pins {
+			pins = "gpio8";
+			function = "qup3";
+			drive-strength = <2>;
+			bias-bus-hold;
+		};
+
+		rts-pins {
+			pins = "gpio9";
+			function = "qup3";
+			drive-strength = <2>;
+			bias-disable;
+		};
+
+		tx-pins {
+			pins = "gpio10";
+			function = "qup3";
+			drive-strength = <2>;
+			bias-disable;
+		};
+
+		rx-pins {
+			pins = "gpio11";
+			function = "qup3";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+	};
+
+	uart3_sleep: uart3-sleep-state {
+		cts-pins {
+			pins = "gpio8";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-bus-hold;
+		};
+
+		rts-pins {
+			pins = "gpio9";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+
+		tx-pins {
+			pins = "gpio10";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+
+		rx-pins {
+			pins = "gpio11";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+	};
+
+	bt_sw_ctrl: bt-sw-ctrl-state {
+		pins = "gpio87";
+		function = "gpio";
+		bias-pull-down;
+	};
+
 	ts_rst_n: ts-rst-n-state {
 		pins = "gpio74";
 		function = "gpio";
@@ -443,15 +509,25 @@
 };
 
 &uart3 {
+	interrupts-extended = <&intc GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>,
+			      <&tlmm 11 IRQ_TYPE_EDGE_FALLING>;
+	pinctrl-0 = <&uart3_default>;
+	pinctrl-1 = <&uart3_sleep>;
+	pinctrl-names = "default", "sleep";
 	status = "okay";
 
+	/* WCN3988: the stock firmware loads apbtfw11.tlv / apnv11.bin */
 	bluetooth {
-		compatible = "qcom,wcn3990-bt";
+		compatible = "qcom,wcn3988-bt";
+
+		pinctrl-0 = <&bt_sw_ctrl>;
+		pinctrl-names = "default";
 
 		vddio-supply = <&pm6125_l9a>;
-		vddxo-supply = <&pm6125_l18a>;
-		vddrf-supply = <&pm6125_l23a>;
-		vddch0-supply = <&pm6125_l17a>;
+		vddxo-supply = <&pm6125_l16a>;
+		vddrf-supply = <&pm6125_l17a>;
+		vddch0-supply = <&pm6125_l23a>;
+		swctrl-gpios = <&tlmm 87 GPIO_ACTIVE_HIGH>;
 		max-speed = <3200000>;
 	};
 };
