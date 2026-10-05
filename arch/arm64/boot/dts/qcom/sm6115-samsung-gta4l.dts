@@ -45,6 +45,24 @@
 		};
 	};
 
+	/*
+	 * Panel power: 1.8 V I/O rail (L9A) plus the stock
+	 * qcom,platform-vcc-gpio (tlmm 71). Kept always on so that the
+	 * rails the bootloader left enabled are never dropped under the
+	 * panel while LAB/IBB (not controlled by this kernel) stay up.
+	 */
+	panel_vcc: regulator-panel-vcc {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_vcc";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&tlmm 71 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&pm6125_l9a>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
 	gpio-keys {
 		compatible = "gpio-keys";
 
@@ -124,11 +142,13 @@
 	status = "okay";
 
 	panel: panel@0 {
-		compatible = "innolux,hx83102e-inx-fhd";
+		/* NT36523 "lide hsd" panel variant (Novatek touch tablets) */
+		compatible = "samsung,gta4l-lide-hsd-nt36523";
 		reg = <0>;
 
-		enable-gpios = <&tlmm 71 GPIO_ACTIVE_HIGH>;
-		pp1800-supply = <&pm6125_l9a>;
+		/* stock: qcom,platform-reset-gpio = <&tlmm 81 0> */
+		reset-gpios = <&tlmm 81 GPIO_ACTIVE_LOW>;
+		vddio-supply = <&panel_vcc>;
 
 		rotation = <270>;
 
@@ -481,8 +501,9 @@
 		reg = <0x0 0x04a80000 0x0 0x4000>;
 		status = "disabled";
 
-		himax_ts@0 {
-		status = "disabled";
+		/* The bootloader of Novatek touch tablets looks for this node */
+		novatek@0 {
+			status = "disabled";
 		};
 	};
 };
