@@ -215,6 +215,9 @@
 		typec-power-opmode = "default";
 		pd-disable;
 
+		/* Lets the PMIC boost power USB devices plugged into the tablet */
+		vbus-supply = <&pmi632_vbus>;
+
 		ports {
 			#address-cells = <1>;
 			#size-cells = <0>;
