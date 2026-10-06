@@ -33,8 +33,8 @@
 #define QG_PERPH_SUBTYPE		0x05
 #define QG_ADC_IBAT_5A			0x3
 
-#define QG_STATUS2			0x09
-#define QG_BATTERY_MISSING		BIT(3)
+#define QG_STATUS1			0x08
+#define QG_BATTERY_PRESENT		BIT(0)
 
 #define QG_LAST_ADC_V_DATA0		0xc0
 #define QG_LAST_ADC_I_DATA0		0xc2
@@ -54,6 +54,7 @@
 #define QG_CHARGING_UA			30000
 #define QG_FULL_UA			150000
 #define QG_FULL_BELOW_MAX_UV		60000
+#define QG_SOC_HYSTERESIS		3
 #define QG_DEFAULT_RESISTANCE_UOHM	100000
 #define QG_DEFAULT_VMIN_UV		3400000
 #define QG_DEFAULT_VMAX_UV		4350000
@@ -186,7 +187,7 @@ static void qcom_qg_update(struct qcom_qg *qg)
 	int resistance = QG_DEFAULT_RESISTANCE_UOHM;
 	int vmax = QG_DEFAULT_VMAX_UV;
 	int vbat, ibat = 0, ocv, soc, status, old_soc, old_status;
-	unsigned int sts = 0;
+	unsigned int sts;
 	bool present, usb, changed;
 
 	if (info) {
@@ -196,8 +197,11 @@ static void qcom_qg_update(struct qcom_qg *qg)
 			vmax = info->voltage_max_design_uv;
 	}
 
-	regmap_read(qg->regmap, qg->base + QG_STATUS2, &sts);
-	present = !(sts & QG_BATTERY_MISSING);
+	/* If the status cannot be read, assume the battery is there */
+	if (regmap_read(qg->regmap, qg->base + QG_STATUS1, &sts))
+		present = true;
+	else
+		present = sts & QG_BATTERY_PRESENT;
 
 	if (qcom_qg_read_vbat(qg, &vbat)) {
 		guard(mutex)(&qg->lock);
@@ -220,25 +224,31 @@ static void qcom_qg_update(struct qcom_qg *qg)
 	old_status = qg->status;
 
 	if (qg->valid) {
+		int diff = soc - qg->soc;
+		int step = 1 + abs(diff) / 10;
+
 		/*
-		 * The estimate moves with the load. Follow it slowly, and do
-		 * not let the level rise while discharging or fall while
-		 * charging.
+		 * The estimate moves with the load. Follow it slowly. A move
+		 * against the direction of the current (rising while
+		 * discharging, falling while charging) needs a clear
+		 * difference, so that noise is ignored but a wrong value
+		 * left behind by a load peak is still corrected.
 		 */
-		if (soc > qg->soc && ibat >= 0)
-			soc = qg->soc + 1;
-		else if (soc < qg->soc && ibat <= 0)
-			soc = qg->soc - 1;
+		if (diff > 0 && (ibat >= 0 || diff >= QG_SOC_HYSTERESIS))
+			soc = qg->soc + step;
+		else if (diff < 0 && (ibat <= 0 || diff <= -QG_SOC_HYSTERESIS))
+			soc = qg->soc - step;
 		else
 			soc = qg->soc;
 	}
 
 	if (!present)
 		status = POWER_SUPPLY_STATUS_UNKNOWN;
-	else if (ibat > QG_CHARGING_UA && soc < 100)
+	else if (usb && abs(ibat) < QG_FULL_UA && vbat > vmax - QG_FULL_BELOW_MAX_UV)
+		status = POWER_SUPPLY_STATUS_FULL;
+	else if (ibat > QG_CHARGING_UA)
 		status = POWER_SUPPLY_STATUS_CHARGING;
-	else if (soc >= 100 ||
-		 (usb && abs(ibat) < QG_FULL_UA && vbat > vmax - QG_FULL_BELOW_MAX_UV))
+	else if (soc >= 100 && ibat > -QG_CHARGING_UA)
 		status = POWER_SUPPLY_STATUS_FULL;
 	else if (usb || ibat > QG_CHARGING_UA)
 		status = POWER_SUPPLY_STATUS_NOT_CHARGING;

@@ -1429,7 +1429,8 @@ static const struct panel_desc gta4l_lide_hsd_desc = {
 	.bpc = 8,
 	.lanes = 4,
 	.format = MIPI_DSI_FMT_RGB888,
-	.mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_LPM,
+	.mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_LPM |
+		      MIPI_DSI_CLOCK_NON_CONTINUOUS,
 	.init_sequence = gta4l_lide_hsd_init_sequence,
 	.has_dcs_backlight = true,
 };
