@@ -441,6 +441,12 @@
 		pm6125_l21a: l21 {
 			regulator-min-microvolt = <2400000>;
 			regulator-max-microvolt = <3600000>;
+			/*
+			 * The stock tree keeps this one on with no consumer of
+			 * its own; tried as the supply of the light sensor.
+			 */
+			regulator-boot-on;
+			regulator-always-on;
 		};
 
 		pm6125_l22a: l22 {
