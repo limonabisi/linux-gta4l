@@ -588,6 +588,7 @@ obj-$(CONFIG_SND_SOC_ES9356)    += snd-soc-es9356.o
 obj-$(CONFIG_SND_SOC_FRAMER)	+= snd-soc-framer.o
 obj-$(CONFIG_SND_SOC_FS_AMP_LIB)+= snd-soc-fs-amp-lib.o
 obj-$(CONFIG_SND_SOC_FS210X)	+= snd-soc-fs210x.o
+obj-$(CONFIG_SND_SOC_FS18XX)	+= foursemi/
 obj-$(CONFIG_SND_SOC_GTM601)    += snd-soc-gtm601.o
 obj-$(CONFIG_SND_SOC_HDAC_HDMI) += snd-soc-hdac-hdmi.o
 obj-$(CONFIG_SND_SOC_HDAC_HDA) += snd-soc-hdac-hda.o
