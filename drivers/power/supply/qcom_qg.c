@@ -3,8 +3,9 @@
  * Qualcomm QGauge (PMI632) battery monitor, read-only
  *
  * The QGauge block samples the battery voltage and current on its own. This
- * driver only reads those samples and never writes to the PMIC: it does not
- * configure the gauge and it does not control charging.
+ * driver only reads those samples, and a few status bits of the charger in
+ * the same PMIC. It never writes to the PMIC: it does not configure the gauge
+ * and it does not control charging.
  *
  * The state of charge is estimated from the open circuit voltage, which in
  * turn is estimated from the measured voltage, the measured current and the
@@ -16,9 +17,11 @@
  * Copyright (c) 2018-2020 The Linux Foundation.
  */
 
+#include <linux/atomic.h>
 #include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/iio/consumer.h>
+#include <linux/interrupt.h>
 #include <linux/math64.h>
 #include <linux/minmax.h>
 #include <linux/mod_devicetable.h>
@@ -46,7 +49,21 @@
 #define QG_I_LSB_5A_NA			152588
 #define QG_I_LSB_10A_NA			305176
 
+/* Charger and boost blocks of the same PMIC, only ever read */
+#define CHGR_STATUS1			0x1006
+#define CHGR_STATUS_MASK		GENMASK(2, 0)
+#define CHGR_STATUS_TRICKLE		1
+#define CHGR_STATUS_TAPER		4
+#define DCDC_CMD_OTG			0x1140
+#define DCDC_OTG_EN			BIT(0)
+#define USBIN_INT_RT_STS		0x1310
+#define USBIN_PLUGIN_RT_STS		BIT(4)
+
 #define QG_POLL_MS			10000
+/* After the cable is plugged or pulled, look again a few times soon */
+#define QG_PLUG_DEBOUNCE_MS		300
+#define QG_FAST_POLL_MS			1000
+#define QG_FAST_POLLS			6
 
 #define QG_VBAT_MIN_PLAUSIBLE_UV	2000000
 #define QG_VBAT_MAX_PLAUSIBLE_UV	5000000
@@ -70,6 +87,9 @@ struct qcom_qg {
 	struct iio_channel *vbat_chan;
 	struct iio_channel *usbin_chan;
 	struct delayed_work work;
+	atomic_t fast_polls;
+	/* The charger says whether a cable is in, and agrees with the ADC */
+	bool plug_status_ok;
 
 	/* Protects the cached state below */
 	struct mutex lock;
@@ -144,18 +164,57 @@ static int qcom_qg_read_ibat(struct qcom_qg *qg, int *ua)
 	return 0;
 }
 
-static bool qcom_qg_usb_present(struct qcom_qg *qg)
+static int qcom_qg_usbin_adc(struct qcom_qg *qg)
 {
 	int ret, uv;
 
 	if (!qg->usbin_chan)
-		return false;
+		return -ENODEV;
 
 	ret = iio_read_channel_processed(qg->usbin_chan, &uv);
 	if (ret < 0)
-		return false;
+		return ret;
 
 	return uv > QG_USB_PRESENT_UV;
+}
+
+static int qcom_qg_usbin_plugged(struct qcom_qg *qg)
+{
+	unsigned int val;
+	int ret;
+
+	ret = regmap_read(qg->regmap, USBIN_INT_RT_STS, &val);
+	if (ret)
+		return ret;
+
+	return !!(val & USBIN_PLUGIN_RT_STS);
+}
+
+/* Returns 1 with a charger plugged in, 0 without, negative if unknown */
+static int qcom_qg_usb_present(struct qcom_qg *qg)
+{
+	unsigned int val;
+
+	/* The tablet powers the port itself: a device is plugged in, no charger */
+	if (!regmap_read(qg->regmap, DCDC_CMD_OTG, &val) && (val & DCDC_OTG_EN))
+		return 0;
+
+	if (qg->plug_status_ok)
+		return qcom_qg_usbin_plugged(qg);
+
+	return qcom_qg_usbin_adc(qg);
+}
+
+static bool qcom_qg_charger_charging(struct qcom_qg *qg)
+{
+	unsigned int val;
+
+	if (regmap_read(qg->regmap, CHGR_STATUS1, &val))
+		return false;
+
+	val &= CHGR_STATUS_MASK;
+
+	return val >= CHGR_STATUS_TRICKLE && val <= CHGR_STATUS_TAPER;
 }
 
 static int qcom_qg_ocv_to_soc(struct qcom_qg *qg, int ocv_uv)
@@ -188,7 +247,8 @@ static void qcom_qg_update(struct qcom_qg *qg)
 	int vmax = QG_DEFAULT_VMAX_UV;
 	int vbat, ibat = 0, ocv, soc, status, old_soc, old_status;
 	unsigned int sts;
-	bool present, usb, changed;
+	bool present, changed;
+	int usb;
 
 	if (info) {
 		if (info->factory_internal_resistance_uohm > 0)
@@ -244,13 +304,22 @@ static void qcom_qg_update(struct qcom_qg *qg)
 
 	if (!present)
 		status = POWER_SUPPLY_STATUS_UNKNOWN;
-	else if (usb && abs(ibat) < QG_FULL_UA && vbat > vmax - QG_FULL_BELOW_MAX_UV)
+	else if (!usb)
+		/*
+		 * Known to be without a charger. The last current sample may
+		 * still be from before the cable was pulled, so do not ask it.
+		 */
+		status = POWER_SUPPLY_STATUS_DISCHARGING;
+	else if (usb > 0 && abs(ibat) < QG_FULL_UA && vbat > vmax - QG_FULL_BELOW_MAX_UV)
 		status = POWER_SUPPLY_STATUS_FULL;
 	else if (ibat > QG_CHARGING_UA)
 		status = POWER_SUPPLY_STATUS_CHARGING;
 	else if (soc >= 100 && ibat > -QG_CHARGING_UA)
 		status = POWER_SUPPLY_STATUS_FULL;
-	else if (usb || ibat > QG_CHARGING_UA)
+	else if (usb > 0 && ibat > -QG_CHARGING_UA && qcom_qg_charger_charging(qg))
+		/* Just plugged in: the charger runs, the sample is still old */
+		status = POWER_SUPPLY_STATUS_CHARGING;
+	else if (usb > 0)
 		status = POWER_SUPPLY_STATUS_NOT_CHARGING;
 	else
 		status = POWER_SUPPLY_STATUS_DISCHARGING;
@@ -278,7 +347,21 @@ static void qcom_qg_work(struct work_struct *work)
 	struct qcom_qg *qg = container_of(work, struct qcom_qg, work.work);
 
 	qcom_qg_update(qg);
-	schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
+
+	if (atomic_dec_if_positive(&qg->fast_polls) >= 0)
+		schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_FAST_POLL_MS));
+	else
+		schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
+}
+
+static irqreturn_t qcom_qg_plug_irq(int irq, void *data)
+{
+	struct qcom_qg *qg = data;
+
+	atomic_set(&qg->fast_polls, QG_FAST_POLLS);
+	mod_delayed_work(system_wq, &qg->work, msecs_to_jiffies(QG_PLUG_DEBOUNCE_MS));
+
+	return IRQ_HANDLED;
 }
 
 static enum power_supply_property qcom_qg_props[] = {
@@ -372,7 +455,7 @@ static int qcom_qg_probe(struct platform_device *pdev)
 	struct power_supply_config cfg = { };
 	struct qcom_qg *qg;
 	unsigned int subtype;
-	int ret;
+	int ret, irq, plugged, adc;
 
 	qg = devm_kzalloc(dev, sizeof(*qg), GFP_KERNEL);
 	if (!qg)
@@ -409,8 +492,18 @@ static int qcom_qg_probe(struct platform_device *pdev)
 
 	INIT_DELAYED_WORK(&qg->work, qcom_qg_work);
 
+	/*
+	 * Believe the charger's plug status only if it can be read and tells
+	 * the same as the measured input voltage right now.
+	 */
+	plugged = qcom_qg_usbin_plugged(qg);
+	adc = qcom_qg_usbin_adc(qg);
+	qg->plug_status_ok = plugged >= 0 && (adc < 0 || adc == plugged);
+
 	cfg.drv_data = qg;
 	cfg.fwnode = dev_fwnode(dev);
+	/* A battery level changing is no reason to stay awake or wake up */
+	cfg.no_wakeup_source = true;
 
 	qg->psy = devm_power_supply_register(dev, &qcom_qg_psy_desc, &cfg);
 	if (IS_ERR(qg->psy))
@@ -440,18 +533,33 @@ static int qcom_qg_probe(struct platform_device *pdev)
 
 	schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
 
+	/* Optional: without it the state is only as fresh as the polling */
+	irq = platform_get_irq_byname_optional(pdev, "usb-plugin");
+	if (irq == -EPROBE_DEFER)
+		return irq;
+	if (irq > 0) {
+		ret = devm_request_threaded_irq(dev, irq, NULL, qcom_qg_plug_irq,
+						IRQF_ONESHOT, "qcom-qg-usb-plugin", qg);
+		if (ret)
+			dev_warn(dev, "no plug interrupt (%d), polling only\n", ret);
+	}
+	dev_info(dev, "plug status from %s, plug interrupt %s\n",
+		 qg->plug_status_ok ? "the charger" : "the input voltage",
+		 irq > 0 && !ret ? "on" : "off");
+
 	return 0;
 }
 
 static const struct of_device_id qcom_qg_of_match[] = {
 	{ .compatible = "qcom,pmi632-qg" },
+	{ .compatible = "qcom,pmi632-qgauge" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, qcom_qg_of_match);
 
 static struct platform_driver qcom_qg_driver = {
 	.driver = {
-		.name = "qcom-qg",
+		.name = KBUILD_MODNAME,
 		.of_match_table = qcom_qg_of_match,
 	},
 	.probe = qcom_qg_probe,
