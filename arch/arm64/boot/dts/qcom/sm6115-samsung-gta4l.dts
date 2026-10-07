@@ -37,7 +37,8 @@
 		voltage-min-design-microvolt = <3400000>;
 		voltage-max-design-microvolt = <4400000>;
 		/* Estimate; the stock profile describes it with tables instead */
-		factory-internal-resistance-micro-ohms = <80000>;
+		/* Measured on a used unit; a fresh pack is closer to 100 mOhm */
+		factory-internal-resistance-micro-ohms = <240000>;
 
 		/* Stock "P85943-QRD-SCUD-ATL-4V4-7040mAh" profile at 25 degrees */
 		ocv-capacity-celsius = <25>;
@@ -742,12 +743,6 @@
 		reg = <PRIMARY_MI2S_RX>;
 		qcom,sd-lines = <0>;
 	};
-};
-
-&venus {
-	firmware-name = "qcom/sm6115/Samsung/gta4l/venus.mbn";
-
-	status = "okay";
 };
 
 &soc {
