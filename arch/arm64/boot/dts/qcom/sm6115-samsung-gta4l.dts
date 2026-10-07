@@ -203,8 +203,11 @@
 	status = "okay";
 
 	panel: panel@0 {
-		/* NT36523 "lide hsd" panel variant (Novatek touch tablets) */
-		compatible = "samsung,gta4l-lide-hsd-nt36523";
+		/*
+		 * One of many 1200x2000 panels; the driver picks the one the
+		 * bootloader names on the command line.
+		 */
+		compatible = "samsung,gta4l-panel";
 		reg = <0>;
 
 		/* stock: qcom,platform-reset-gpio = <&tlmm 81 0> */
