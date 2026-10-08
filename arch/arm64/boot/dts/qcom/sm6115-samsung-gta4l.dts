@@ -161,9 +161,9 @@
 		audio-routing = "AMIC1", "MIC BIAS1",
 				"AMIC2", "MIC BIAS2",
 				"AMIC3", "MIC BIAS3",
-				"TX SWR_ADC0", "ADC1_OUTPUT",
-				"TX SWR_ADC1", "ADC2_OUTPUT",
-				"TX SWR_ADC2", "ADC3_OUTPUT";
+				"TX SWR_INPUT0", "ADC1_OUTPUT",
+				"TX SWR_INPUT4", "ADC2_OUTPUT",
+				"TX SWR_INPUT5", "ADC3_OUTPUT";
 
 		mm1-dai-link {
 			link-name = "MultiMedia1";
