@@ -890,6 +890,9 @@
 		qcom,micbias2-microvolt = <2400000>;
 		qcom,micbias3-microvolt = <2400000>;
 
+		/* stock: qcom,msm-mbhc-hphl-swh = 1, qcom,msm-mbhc-gnd-swh = 0 */
+		qcom,ground-jack-type-normally-closed;
+
 		qcom,rx-device = <&wcd937x_rx>;
 		qcom,tx-device = <&wcd937x_tx>;
 
