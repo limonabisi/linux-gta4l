@@ -893,6 +893,13 @@
 		/* stock: qcom,msm-mbhc-hphl-swh = 1, qcom,msm-mbhc-gnd-swh = 0 */
 		qcom,ground-jack-type-normally-closed;
 
+		/*
+		 * The driver default (1700 mV) is meant for a 1.8 V micbias; with
+		 * the 2.4 V micbias used here a headset mic reads 1.5-1.8 V and
+		 * was misreported as line-out. Scale it: 1700 * 2400 / 1800.
+		 */
+		qcom,mbhc-headset-vthreshold-microvolt = <2200000>;
+
 		qcom,rx-device = <&wcd937x_rx>;
 		qcom,tx-device = <&wcd937x_tx>;
 
