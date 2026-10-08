@@ -564,7 +564,13 @@
 	status = "okay";
 
 	touchscreen@0 {
-		compatible = "novatek,nt36523-spi";
+		/*
+		 * The controller depends on the panel variant; each driver
+		 * checks the panel the bootloader names and only binds to its
+		 * own family.
+		 */
+		compatible = "novatek,nt36523-spi", "himax,hx83102e-spi",
+			     "focaltech,ft8201-spi";
 		reg = <0>;
 		spi-max-frequency = <9600000>;
 

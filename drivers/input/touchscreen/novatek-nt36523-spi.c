@@ -1061,12 +1061,35 @@ static const char *nvt_fw_name_for_panel(struct device *dev, const char *name)
 	return fw ?: name;
 }
 
+/*
+ * The touch node of these tablets is shared by the drivers of every touch
+ * controller fitted to the different panel variants. When the bootloader
+ * names a panel of another controller family, leave the device to its driver.
+ */
+static bool nvt_other_panel(void)
+{
+	static const char key[] = "dsi_display0=qcom,mdss_dsi_";
+	const char *args, *s;
+
+	if (!of_chosen || of_property_read_string(of_chosen, "bootargs", &args))
+		return false;
+
+	s = strstr(args, key);
+	if (!s)
+		return false;
+
+	return strncmp(s + sizeof(key) - 1, "nt36523_", 8) != 0;
+}
+
 static int nvt_probe(struct spi_device *spi)
 {
 	struct device *dev = &spi->dev;
 	struct input_dev *input;
 	struct nvt_ts *ts;
 	int ret;
+
+	if (nvt_other_panel())
+		return -ENODEV;
 
 	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)
