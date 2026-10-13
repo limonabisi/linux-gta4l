@@ -22,7 +22,8 @@
 / {
 	model = "Samsung Galaxy Tab A7 10.4 (2020)";
 	compatible = "samsung,gta4l", "qcom,sm6115";
-	qcom,msm-id = <0x1bc 0x10000>;
+	/* Same ids as the stock Bengal base DTB: SM4250 (0x1a1) and SM6115 (0x1bc) */
+	qcom,msm-id = <0x1a1 0x10000>, <0x1bc 0x10000>;
 	#address-cells = <0x02>;
 	#size-cells = <0x02>;
 	qcom,board-id = <0x1000b 0x00>;
@@ -863,8 +864,20 @@
 		reg = <0x0 0x04a80000 0x0 0x4000>;
 		status = "disabled";
 
-		/* The bootloader of Novatek touch tablets looks for this node */
+		/*
+		 * LinuxLoader looks up the node of the fitted panel's touch
+		 * vendor and stays in Download Mode if it is missing, so all
+		 * three stock candidates must exist.
+		 */
+		himax_ts@0 {
+			status = "disabled";
+		};
+
 		novatek@0 {
+			status = "disabled";
+		};
+
+		focaltech@0 {
 			status = "disabled";
 		};
 	};
