@@ -7,11 +7,13 @@
  * the same PMIC. It never writes to the PMIC: it does not configure the gauge
  * and it does not control charging.
  *
- * The state of charge is estimated from the open circuit voltage, which in
- * turn is estimated from the measured voltage, the measured current and the
- * internal resistance given in the battery description. That is cruder than
- * the coulomb counting done by the vendor driver, but good enough to show a
- * battery level and a charging state.
+ * The state of charge is counted: every sample of the measured current is
+ * added to the charge in the battery, against the design capacity from the
+ * battery description. The count is set to full when the charger reports
+ * that it terminated charging. The open circuit voltage, estimated from the
+ * measured voltage, current and internal resistance, is only used to start
+ * the count at boot and to restart it after a long sleep, when the battery
+ * has rested and its voltage is a good measure.
  *
  * Register layout taken from the downstream qpnp-qg driver,
  * Copyright (c) 2018-2020 The Linux Foundation.
@@ -22,6 +24,7 @@
 #include <linux/bits.h>
 #include <linux/iio/consumer.h>
 #include <linux/interrupt.h>
+#include <linux/ktime.h>
 #include <linux/math64.h>
 #include <linux/minmax.h>
 #include <linux/mod_devicetable.h>
@@ -31,6 +34,7 @@
 #include <linux/power_supply.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
+#include <linux/timekeeping.h>
 #include <linux/workqueue.h>
 
 #define QG_PERPH_SUBTYPE		0x05
@@ -54,6 +58,7 @@
 #define CHGR_STATUS_MASK		GENMASK(2, 0)
 #define CHGR_STATUS_TRICKLE		1
 #define CHGR_STATUS_TAPER		4
+#define CHGR_STATUS_TERMINATE		5
 #define DCDC_CMD_OTG			0x1140
 #define DCDC_OTG_EN			BIT(0)
 #define USBIN_INT_RT_STS		0x1310
@@ -75,6 +80,23 @@
 #define QG_DEFAULT_RESISTANCE_UOHM	100000
 #define QG_DEFAULT_VMIN_UV		3400000
 #define QG_DEFAULT_VMAX_UV		4350000
+/* Used when the battery description gives no capacity */
+#define QG_DEFAULT_CAPACITY_UAH		7040000
+/* A gap longer than this is a sleep: the samples did not see it */
+#define QG_MAX_COUNT_GAP_MS		(3 * QG_POLL_MS)
+/* After a sleep this long the battery has rested; its voltage can be trusted */
+#define QG_REST_MS			(10 * 60 * 1000)
+#define QG_REST_UA			50000
+/*
+ * Until the count has a reliable starting point (full, empty, a rested
+ * battery or a value saved at shutdown), pull it towards the voltage
+ * estimate whenever the current is low enough for that estimate to hold.
+ * The first sample is taken while the system boots under heavy load.
+ */
+#define QG_SETTLE_UA			300000
+#define QG_SETTLE_DIV			16
+/* Do not show 0% while the voltage says there is still charge left */
+#define QG_EMPTY_ABOVE_VMIN_UV		100000
 
 struct qcom_qg {
 	struct device *dev;
@@ -101,6 +123,20 @@ struct qcom_qg {
 	int ocv_uv;
 	int soc;
 	int status;
+
+	/* Coulomb counter */
+	bool counting;
+	/* The count started from a point that is known to be right */
+	bool anchored;
+	/* The charger finished; stays until unplugged or discharging */
+	bool full_latched;
+	/* A full or empty point was seen since the other one: can learn */
+	bool full_seen;
+	bool empty_seen;
+	s64 charge_uah;
+	s64 full_uah;
+	s64 design_uah;
+	ktime_t last_sample;
 };
 
 static int qcom_qg_read_u16(struct qcom_qg *qg, unsigned int reg, u16 *val)
@@ -205,16 +241,15 @@ static int qcom_qg_usb_present(struct qcom_qg *qg)
 	return qcom_qg_usbin_adc(qg);
 }
 
-static bool qcom_qg_charger_charging(struct qcom_qg *qg)
+/* Returns the charger's state machine position, negative if unknown */
+static int qcom_qg_charger_state(struct qcom_qg *qg)
 {
 	unsigned int val;
 
 	if (regmap_read(qg->regmap, CHGR_STATUS1, &val))
-		return false;
+		return -EIO;
 
-	val &= CHGR_STATUS_MASK;
-
-	return val >= CHGR_STATUS_TRICKLE && val <= CHGR_STATUS_TAPER;
+	return val & CHGR_STATUS_MASK;
 }
 
 static int qcom_qg_ocv_to_soc(struct qcom_qg *qg, int ocv_uv)
@@ -244,17 +279,20 @@ static void qcom_qg_update(struct qcom_qg *qg)
 {
 	struct power_supply_battery_info *info = qg->info;
 	int resistance = QG_DEFAULT_RESISTANCE_UOHM;
-	int vmax = QG_DEFAULT_VMAX_UV;
+	int vmax = QG_DEFAULT_VMAX_UV, vmin = QG_DEFAULT_VMIN_UV;
 	int vbat, ibat = 0, ocv, soc, status, old_soc, old_status;
 	unsigned int sts;
-	bool present, changed;
-	int usb;
+	bool present, changed, terminated;
+	int usb, chg_state;
+	ktime_t now;
 
 	if (info) {
 		if (info->factory_internal_resistance_uohm > 0)
 			resistance = info->factory_internal_resistance_uohm;
 		if (info->voltage_max_design_uv > 0)
 			vmax = info->voltage_max_design_uv;
+		if (info->voltage_min_design_uv > 0)
+			vmin = info->voltage_min_design_uv;
 	}
 
 	/* If the status cannot be read, assume the battery is there */
@@ -274,33 +312,105 @@ static void qcom_qg_update(struct qcom_qg *qg)
 	qcom_qg_read_ibat(qg, &ibat);
 	usb = qcom_qg_usb_present(qg);
 
+	chg_state = usb > 0 ? qcom_qg_charger_state(qg) : -ENODEV;
+	now = ktime_get_boottime();
+
 	/* Remove the voltage drop (or rise, while charging) across the cell */
 	ocv = vbat - div_s64((s64)ibat * resistance, 1000000);
-	soc = qcom_qg_ocv_to_soc(qg, ocv);
 
 	guard(mutex)(&qg->lock);
 
 	old_soc = qg->soc;
 	old_status = qg->status;
 
-	if (qg->valid) {
-		int diff = soc - qg->soc;
-		int step = 1 + abs(diff) / 10;
+	/* The charger says it is done: the battery is full */
+	terminated = usb > 0 && (chg_state == CHGR_STATUS_TERMINATE ||
+				 (abs(ibat) < QG_FULL_UA &&
+				  vbat > vmax - QG_FULL_BELOW_MAX_UV));
 
-		/*
-		 * The estimate moves with the load. Follow it slowly. A move
-		 * against the direction of the current (rising while
-		 * discharging, falling while charging) needs a clear
-		 * difference, so that noise is ignored but a wrong value
-		 * left behind by a load peak is still corrected.
-		 */
-		if (diff > 0 && (ibat >= 0 || diff >= QG_SOC_HYSTERESIS))
-			soc = qg->soc + step;
-		else if (diff < 0 && (ibat <= 0 || diff <= -QG_SOC_HYSTERESIS))
-			soc = qg->soc - step;
-		else
-			soc = qg->soc;
+	if (!qg->counting) {
+		/* Nothing counted yet: start from the voltage, once */
+		qg->charge_uah = div_s64((s64)qcom_qg_ocv_to_soc(qg, ocv) *
+					 qg->full_uah, 100);
+		qg->counting = true;
+	} else {
+		s64 gap_ms = ktime_ms_delta(now, qg->last_sample);
+
+		if (gap_ms <= QG_MAX_COUNT_GAP_MS) {
+			/* Charge moved in or out since the last sample */
+			qg->charge_uah += div_s64((s64)(ibat + qg->ibat_ua) / 2 * gap_ms,
+						  3600 * 1000);
+		} else if (gap_ms >= QG_REST_MS && abs(ibat) < QG_REST_UA) {
+			/* Long sleep: the battery rested, its voltage is right */
+			qg->charge_uah = div_s64((s64)qcom_qg_ocv_to_soc(qg, ocv) *
+						 qg->full_uah, 100);
+			qg->anchored = true;
+		} else {
+			/* Short sleep: count it at the current seen on waking */
+			qg->charge_uah += div_s64((s64)min(ibat, 0) * gap_ms,
+						  3600 * 1000);
+		}
 	}
+	qg->last_sample = now;
+
+	if (!qg->anchored && abs(ibat) < QG_SETTLE_UA) {
+		s64 target = div_s64((s64)qcom_qg_ocv_to_soc(qg, ocv) * qg->full_uah, 100);
+
+		qg->charge_uah += div_s64(target - qg->charge_uah, QG_SETTLE_DIV);
+	}
+
+	if (terminated) {
+		/* Learn the real capacity when counted up from empty */
+		if (qg->empty_seen) {
+			s64 learned = qg->charge_uah;
+
+			if (learned > qg->design_uah / 2 &&
+			    learned < qg->design_uah + qg->design_uah / 10)
+				qg->full_uah = learned;
+			qg->empty_seen = false;
+		}
+		qg->charge_uah = qg->full_uah;
+		qg->full_latched = true;
+		qg->full_seen = true;
+		qg->anchored = true;
+	} else if (usb <= 0 || ibat < -QG_CHARGING_UA) {
+		/* Unplugged, or the load is bigger than the charger */
+		qg->full_latched = false;
+	}
+
+	if (!usb && vbat < vmin + QG_EMPTY_ABOVE_VMIN_UV && ibat > -QG_FULL_UA) {
+		/* Light load and the voltage at the bottom: the battery is empty */
+		if (qg->full_seen) {
+			s64 learned = qg->full_uah - qg->charge_uah;
+
+			if (learned > qg->design_uah / 2 &&
+			    learned < qg->design_uah + qg->design_uah / 10)
+				qg->full_uah = learned;
+			qg->full_seen = false;
+		}
+		qg->charge_uah = 0;
+		qg->empty_seen = true;
+		qg->anchored = true;
+	}
+
+	/*
+	 * While a capacity is being learned the count may run past the end
+	 * it is measured from: below empty after a full charge, above full
+	 * after an empty battery. Otherwise it stays within the battery.
+	 */
+	qg->charge_uah = clamp_t(s64, qg->charge_uah,
+				 qg->full_seen ? -qg->design_uah / 2 : 0,
+				 qg->empty_seen ? qg->design_uah + qg->design_uah / 10 :
+						  qg->full_uah);
+	soc = DIV_ROUND_CLOSEST_ULL(clamp_t(s64, qg->charge_uah, 0, qg->full_uah) * 100,
+				    qg->full_uah);
+
+	/* Counted to zero while the voltage still has charge: hold at 1% */
+	if (soc == 0 && vbat >= vmin + QG_EMPTY_ABOVE_VMIN_UV)
+		soc = 1;
+	/* Only the charger finishing makes 100% */
+	if (soc == 100 && !qg->full_latched)
+		soc = 99;
 
 	if (!present)
 		status = POWER_SUPPLY_STATUS_UNKNOWN;
@@ -310,13 +420,12 @@ static void qcom_qg_update(struct qcom_qg *qg)
 		 * still be from before the cable was pulled, so do not ask it.
 		 */
 		status = POWER_SUPPLY_STATUS_DISCHARGING;
-	else if (usb > 0 && abs(ibat) < QG_FULL_UA && vbat > vmax - QG_FULL_BELOW_MAX_UV)
+	else if (qg->full_latched)
 		status = POWER_SUPPLY_STATUS_FULL;
 	else if (ibat > QG_CHARGING_UA)
 		status = POWER_SUPPLY_STATUS_CHARGING;
-	else if (soc >= 100 && ibat > -QG_CHARGING_UA)
-		status = POWER_SUPPLY_STATUS_FULL;
-	else if (usb > 0 && ibat > -QG_CHARGING_UA && qcom_qg_charger_charging(qg))
+	else if (usb > 0 && ibat > -QG_CHARGING_UA &&
+		 chg_state >= CHGR_STATUS_TRICKLE && chg_state <= CHGR_STATUS_TAPER)
 		/* Just plugged in: the charger runs, the sample is still old */
 		status = POWER_SUPPLY_STATUS_CHARGING;
 	else if (usb > 0)
@@ -324,7 +433,7 @@ static void qcom_qg_update(struct qcom_qg *qg)
 	else
 		status = POWER_SUPPLY_STATUS_DISCHARGING;
 
-	if (status == POWER_SUPPLY_STATUS_FULL)
+	if (qg->full_latched)
 		soc = 100;
 
 	changed = !qg->valid || soc != old_soc || status != old_status ||
@@ -349,9 +458,9 @@ static void qcom_qg_work(struct work_struct *work)
 	qcom_qg_update(qg);
 
 	if (atomic_dec_if_positive(&qg->fast_polls) >= 0)
-		schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_FAST_POLL_MS));
+		queue_delayed_work(system_dfl_wq, &qg->work, msecs_to_jiffies(QG_FAST_POLL_MS));
 	else
-		schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
+		queue_delayed_work(system_dfl_wq, &qg->work, msecs_to_jiffies(QG_POLL_MS));
 }
 
 static irqreturn_t qcom_qg_plug_irq(int irq, void *data)
@@ -359,7 +468,7 @@ static irqreturn_t qcom_qg_plug_irq(int irq, void *data)
 	struct qcom_qg *qg = data;
 
 	atomic_set(&qg->fast_polls, QG_FAST_POLLS);
-	mod_delayed_work(system_wq, &qg->work, msecs_to_jiffies(QG_PLUG_DEBOUNCE_MS));
+	mod_delayed_work(system_dfl_wq, &qg->work, msecs_to_jiffies(QG_PLUG_DEBOUNCE_MS));
 
 	return IRQ_HANDLED;
 }
@@ -371,6 +480,9 @@ static enum power_supply_property qcom_qg_props[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_VOLTAGE_OCV,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_CHARGE_NOW,
+	POWER_SUPPLY_PROP_CHARGE_FULL,
+	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
 };
 
@@ -388,6 +500,12 @@ static int qcom_qg_get_property(struct power_supply *psy,
 		return 0;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LIPO;
+		return 0;
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+		val->intval = qg->full_uah;
+		return 0;
+	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
+		val->intval = qg->design_uah;
 		return 0;
 	default:
 		break;
@@ -412,11 +530,60 @@ static int qcom_qg_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		val->intval = qg->ibat_ua;
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		val->intval = clamp_t(s64, qg->charge_uah, 0, qg->full_uah);
+		break;
 	default:
 		return -EINVAL;
 	}
 
 	return 0;
+}
+
+/*
+ * The learned capacity is lost at reboot. Userspace may save it and write it
+ * back, so that the level is right without a full charge and discharge.
+ */
+static int qcom_qg_set_property(struct power_supply *psy,
+				enum power_supply_property psp,
+				const union power_supply_propval *val)
+{
+	struct qcom_qg *qg = power_supply_get_drvdata(psy);
+	s64 v = val->intval;
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+		if (v <= qg->design_uah / 2 || v >= qg->design_uah + qg->design_uah / 10)
+			return -ERANGE;
+		scoped_guard(mutex, &qg->lock) {
+			/* Keep the level, change what it is a level of */
+			qg->charge_uah = div_s64(qg->charge_uah * v, qg->full_uah);
+			qg->full_uah = v;
+		}
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		/* The count saved at shutdown: continue from it */
+		scoped_guard(mutex, &qg->lock) {
+			if (v < 0 || v > qg->full_uah)
+				return -ERANGE;
+			qg->charge_uah = v;
+			qg->counting = true;
+			qg->anchored = true;
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	mod_delayed_work(system_dfl_wq, &qg->work, 0);
+
+	return 0;
+}
+
+static int qcom_qg_property_is_writeable(struct power_supply *psy,
+					 enum power_supply_property psp)
+{
+	return psp == POWER_SUPPLY_PROP_CHARGE_FULL || psp == POWER_SUPPLY_PROP_CHARGE_NOW;
 }
 
 static const struct power_supply_desc qcom_qg_psy_desc = {
@@ -425,6 +592,8 @@ static const struct power_supply_desc qcom_qg_psy_desc = {
 	.properties = qcom_qg_props,
 	.num_properties = ARRAY_SIZE(qcom_qg_props),
 	.get_property = qcom_qg_get_property,
+	.set_property = qcom_qg_set_property,
+	.property_is_writeable = qcom_qg_property_is_writeable,
 };
 
 static struct iio_channel *qcom_qg_get_channel(struct device *dev, const char *name)
@@ -516,6 +685,11 @@ static int qcom_qg_probe(struct platform_device *pdev)
 		qg->info = NULL;
 	}
 
+	qg->design_uah = QG_DEFAULT_CAPACITY_UAH;
+	if (qg->info && qg->info->charge_full_design_uah > 0)
+		qg->design_uah = qg->info->charge_full_design_uah;
+	qg->full_uah = qg->design_uah;
+
 	ret = devm_add_action_or_reset(dev, qcom_qg_stop, qg);
 	if (ret)
 		return ret;
@@ -531,7 +705,7 @@ static int qcom_qg_probe(struct platform_device *pdev)
 				 subtype);
 	}
 
-	schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
+	queue_delayed_work(system_dfl_wq, &qg->work, msecs_to_jiffies(QG_POLL_MS));
 
 	/* Optional: without it the state is only as fresh as the polling */
 	irq = platform_get_irq_byname_optional(pdev, "usb-plugin");
