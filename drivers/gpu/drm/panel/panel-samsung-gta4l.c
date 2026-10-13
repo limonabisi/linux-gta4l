@@ -35,8 +35,6 @@ struct gta4l_panel {
 
 #include "gta4l-panels.h"
 
-#define GTA4L_DEFAULT_PANEL "nt36523_lide_hsd_video"
-
 static char *panel_name;
 module_param_named(panel, panel_name, charp, 0444);
 MODULE_PARM_DESC(panel, "Panel name, overriding the one named by the bootloader");
@@ -92,8 +90,13 @@ static const struct gta4l_panel *gta4l_detect(struct device *dev)
 		}
 	}
 
-	dev_warn(dev, "falling back to %s\n", GTA4L_DEFAULT_PANEL);
-	return gta4l_find(GTA4L_DEFAULT_PANEL, strlen(GTA4L_DEFAULT_PANEL));
+	/*
+	 * Driving a panel with another panel's commands can leave it in a bad
+	 * state, so do not guess: leave the display off. The serial console
+	 * still works, and panel= can name the panel by hand.
+	 */
+	dev_err(dev, "no known panel, leaving the display off (use panel=<name>)\n");
+	return NULL;
 }
 
 /*
