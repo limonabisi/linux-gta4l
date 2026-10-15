@@ -654,6 +654,16 @@ config DRM_PANEL_NOVATEK_NT35950
 	  Sharp panels used in Sony Xperia Z5 Premium and XZ Premium
 	  mobile phones.
 
+config DRM_PANEL_SAMSUNG_GTA4L
+	tristate "Samsung Galaxy Tab A7 (gta4l) DSI panels"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Say Y here to support the 1200x2000 DSI panels fitted to the
+	  Samsung Galaxy Tab A7 (SM-T500/T505). The driver picks the panel
+	  the bootloader names on the kernel command line.
+
 config DRM_PANEL_NOVATEK_NT36523
 	tristate "Novatek NT36523 panel driver"
 	depends on OF
