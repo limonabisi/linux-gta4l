@@ -8,6 +8,9 @@
 #include "sm6115.dtsi"
 #include "pm6125.dtsi"
 #include "pmi632.dtsi"
+#include <dt-bindings/clock/qcom,sm6115-lpasscc.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
 #include <dt-bindings/usb/pd.h>
 
 /delete-node/ &cdsp_sec_mem;
@@ -19,13 +22,42 @@
 / {
 	model = "Samsung Galaxy Tab A7 10.4 (2020)";
 	compatible = "samsung,gta4l", "qcom,sm6115";
-	qcom,msm-id = <0x1bc 0x10000>;
+	/* Same ids as the stock Bengal base DTB: SM4250 (0x1a1) and SM6115 (0x1bc) */
+	qcom,msm-id = <0x1a1 0x10000>, <0x1bc 0x10000>;
 	#address-cells = <0x02>;
 	#size-cells = <0x02>;
 	qcom,board-id = <0x1000b 0x00>;
 
 	aliases {
 		serial0 = &uart4;
+	};
+
+	battery: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion-polymer";
+		charge-full-design-microamp-hours = <7040000>;
+		voltage-min-design-microvolt = <3400000>;
+		voltage-max-design-microvolt = <4400000>;
+		/* Estimate; the stock profile describes it with tables instead */
+		factory-internal-resistance-micro-ohms = <80000>;
+
+		/* Stock "P85943-QRD-SCUD-ATL-4V4-7040mAh" profile at 25 degrees */
+		ocv-capacity-celsius = <25>;
+		ocv-capacity-table-0 =
+			<4377700 100>, <4356100 98>, <4332300 96>, <4308500 94>,
+			<4284700 92>, <4260800 90>, <4237400 88>, <4214300 86>,
+			<4191400 84>, <4168600 82>, <4146200 80>, <4124600 78>,
+			<4103500 76>, <4083000 74>, <4062700 72>, <4043200 70>,
+			<4024600 68>, <4006700 66>, <3990000 64>, <3975500 62>,
+			<3959500 60>, <3936300 58>, <3909600 56>, <3890700 54>,
+			<3877400 52>, <3866700 50>, <3858100 48>, <3851000 46>,
+			<3843600 44>, <3836000 42>, <3829100 40>, <3823300 38>,
+			<3818200 36>, <3813600 34>, <3809800 32>, <3805900 30>,
+			<3801900 28>, <3797700 26>, <3791500 24>, <3782300 22>,
+			<3771500 20>, <3759800 18>, <3746300 16>, <3729700 14>,
+			<3714900 12>, <3706400 10>, <3704000 9>, <3702500 8>,
+			<3700600 7>, <3696000 6>, <3671900 5>, <3628200 4>,
+			<3570500 3>, <3491700 2>, <3369000 1>, <3000000 0>;
 	};
 
 	chosen {
@@ -43,6 +75,24 @@
 			stride = <(1200 * 4)>;
 			format = "a8r8g8b8";
 		};
+	};
+
+	/*
+	 * Panel power: 1.8 V I/O rail (L9A) plus the stock
+	 * qcom,platform-vcc-gpio (tlmm 71). Kept always on so that the
+	 * rails the bootloader left enabled are never dropped under the
+	 * panel while LAB/IBB (not controlled by this kernel) stay up.
+	 */
+	panel_vcc: regulator-panel-vcc {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_vcc";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&tlmm 71 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&pm6125_l9a>;
+		regulator-boot-on;
+		regulator-always-on;
 	};
 
 	gpio-keys {
@@ -101,6 +151,85 @@
 			no-map;
 		};
 	};
+
+	sound {
+		compatible = "qcom,qrb4210-rb2-sndcard";
+		pinctrl-0 = <&lpi_i2s1_active>;
+		pinctrl-names = "default";
+		model = "Samsung-Galaxy-Tab-A7";
+
+		/* Headset and built-in microphones, as in the stock tree */
+		audio-routing = "AMIC1", "MIC BIAS1",
+				"AMIC2", "MIC BIAS2",
+				"AMIC3", "MIC BIAS3",
+				"TX SWR_INPUT0", "ADC1_OUTPUT",
+				"TX SWR_INPUT4", "ADC2_OUTPUT",
+				"TX SWR_INPUT5", "ADC3_OUTPUT";
+
+		mm1-dai-link {
+			link-name = "MultiMedia1";
+
+			cpu {
+				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
+			};
+		};
+
+		mm2-dai-link {
+			link-name = "MultiMedia2";
+
+			cpu {
+				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>;
+			};
+		};
+
+		wcd-playback-dai-link {
+			link-name = "WCD Playback";
+
+			cpu {
+				sound-dai = <&q6afedai RX_CODEC_DMA_RX_0>;
+			};
+
+			platform {
+				sound-dai = <&q6routing>;
+			};
+
+			codec {
+				sound-dai = <&wcd937x 0>, <&swr1 0>, <&lpass_rxmacro 0>;
+			};
+		};
+
+		wcd-capture-dai-link {
+			link-name = "WCD Capture";
+
+			cpu {
+				sound-dai = <&q6afedai TX_CODEC_DMA_TX_3>;
+			};
+
+			platform {
+				sound-dai = <&q6routing>;
+			};
+
+			codec {
+				sound-dai = <&wcd937x 1>, <&swr0 0>, <&lpass_txmacro 0>;
+			};
+		};
+
+		speaker-dai-link {
+			link-name = "Speaker Playback";
+
+			cpu {
+				sound-dai = <&q6afedai PRIMARY_MI2S_RX>;
+			};
+
+			platform {
+				sound-dai = <&q6routing>;
+			};
+
+			codec {
+				sound-dai = <&speaker_amp>;
+			};
+		};
+	};
 };
 
 &gpi_dma0 {
@@ -124,11 +253,16 @@
 	status = "okay";
 
 	panel: panel@0 {
-		compatible = "innolux,hx83102e-inx-fhd";
+		/*
+		 * One of many 1200x2000 panels; the driver picks the one the
+		 * bootloader names on the command line.
+		 */
+		compatible = "samsung,gta4l-panel";
 		reg = <0>;
 
-		enable-gpios = <&tlmm 71 GPIO_ACTIVE_HIGH>;
-		pp1800-supply = <&pm6125_l9a>;
+		/* stock: qcom,platform-reset-gpio = <&tlmm 81 0> */
+		reset-gpios = <&tlmm 81 GPIO_ACTIVE_LOW>;
+		vddio-supply = <&panel_vcc>;
 
 		rotation = <270>;
 
@@ -149,6 +283,15 @@
 	status = "okay";
 };
 
+&pmi632_qg {
+	/* The newer driver, which also follows the charger's plug interrupt */
+	compatible = "qcom,pmi632-qgauge";
+	interrupts = <0x2 0x13 0x4 IRQ_TYPE_EDGE_BOTH>;
+	interrupt-names = "usb-plugin";
+	monitored-battery = <&battery>;
+	status = "okay";
+};
+
 &pmi632_typec {
 	status = "okay";
 
@@ -161,6 +304,9 @@
 
 		typec-power-opmode = "default";
 		pd-disable;
+
+		/* Lets the PMIC boost power USB devices plugged into the tablet */
+		vbus-supply = <&pmi632_vbus>;
 
 		ports {
 			#address-cells = <1>;
@@ -185,7 +331,7 @@
 
 &pmi632_vbus {
 	regulator-min-microamp = <500000>;
-	regulator-max-microamp = <1000000>;
+	regulator-max-microamp = <1500000>;
 	status = "okay";
 };
 
@@ -205,6 +351,15 @@
 
 &pon_resin {
 	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
+};
+
+&qup_spi0_default {
+	drive-strength = <6>;
+	bias-disable;
+};
+
+&qupv3_id_0 {
 	status = "okay";
 };
 
@@ -340,6 +495,12 @@
 		pm6125_l21a: l21 {
 			regulator-min-microvolt = <2400000>;
 			regulator-max-microvolt = <3600000>;
+			/*
+			 * The stock tree keeps this one on with no consumer of
+			 * its own; tried as the supply of the light sensor.
+			 */
+			regulator-boot-on;
+			regulator-always-on;
 		};
 
 		pm6125_l22a: l22 {
@@ -400,8 +561,113 @@
 	status = "okay";
 };
 
+&spi0 {
+	status = "okay";
+
+	touchscreen@0 {
+		/*
+		 * The controller depends on the panel variant; each driver
+		 * checks the panel the bootloader names and only binds to its
+		 * own family.
+		 */
+		compatible = "novatek,nt36523-spi", "himax,hx83102e-spi",
+			     "focaltech,ft8201-spi";
+		reg = <0>;
+		spi-max-frequency = <9600000>;
+
+		interrupts-extended = <&tlmm 80 IRQ_TYPE_EDGE_RISING>;
+
+		pinctrl-0 = <&ts_int_n>;
+		pinctrl-names = "default";
+
+		/* The touch firmware is lost whenever the panel is reset */
+		panel = <&panel>;
+		firmware-name = "novatek_ts_fw_lide_hsd.bin";
+
+		touchscreen-size-x = <1200>;
+		touchscreen-size-y = <2000>;
+	};
+};
+
 &tlmm {
-	gpio-reserved-ranges = <0 4>, <14 4>;
+	/*
+	 * GPIO 0-3 carry the touchscreen SPI bus (QUP0) on this board and
+	 * are driven by the stock kernel, so they are not reserved here.
+	 */
+	gpio-reserved-ranges = <14 4>;
+
+	wcd_reset_n: wcd-reset-n-state {
+		pins = "gpio92";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+	};
+
+	uart3_default: uart3-default-state {
+		cts-pins {
+			pins = "gpio8";
+			function = "qup3";
+			drive-strength = <2>;
+			bias-bus-hold;
+		};
+
+		rts-pins {
+			pins = "gpio9";
+			function = "qup3";
+			drive-strength = <2>;
+			bias-disable;
+		};
+
+		tx-pins {
+			pins = "gpio10";
+			function = "qup3";
+			drive-strength = <2>;
+			bias-disable;
+		};
+
+		rx-pins {
+			pins = "gpio11";
+			function = "qup3";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+	};
+
+	uart3_sleep: uart3-sleep-state {
+		cts-pins {
+			pins = "gpio8";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-bus-hold;
+		};
+
+		rts-pins {
+			pins = "gpio9";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+
+		tx-pins {
+			pins = "gpio10";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+
+		rx-pins {
+			pins = "gpio11";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+	};
+
+	bt_sw_ctrl: bt-sw-ctrl-state {
+		pins = "gpio87";
+		function = "gpio";
+		bias-pull-down;
+	};
 
 	ts_rst_n: ts-rst-n-state {
 		pins = "gpio74";
@@ -419,26 +685,41 @@
 };
 
 &uart3 {
+	interrupts-extended = <&intc GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>,
+			      <&tlmm 11 IRQ_TYPE_EDGE_FALLING>;
+	pinctrl-0 = <&uart3_default>;
+	pinctrl-1 = <&uart3_sleep>;
+	pinctrl-names = "default", "sleep";
 	status = "okay";
 
+	/* WCN3988: the stock firmware loads apbtfw11.tlv / apnv11.bin */
 	bluetooth {
-		compatible = "qcom,wcn3990-bt";
+		compatible = "qcom,wcn3988-bt";
+
+		pinctrl-0 = <&bt_sw_ctrl>;
+		pinctrl-names = "default";
 
 		vddio-supply = <&pm6125_l9a>;
-		vddxo-supply = <&pm6125_l18a>;
-		vddrf-supply = <&pm6125_l23a>;
-		vddch0-supply = <&pm6125_l17a>;
+		vddxo-supply = <&pm6125_l16a>;
+		vddrf-supply = <&pm6125_l17a>;
+		vddch0-supply = <&pm6125_l23a>;
+		swctrl-gpios = <&tlmm 87 GPIO_ACTIVE_HIGH>;
 		max-speed = <3200000>;
 	};
 };
 
+/* Debug UART (ttyMSM0, 115200n8), the same port the bootloader logs to */
 &uart4 {
-	compatible = "qcom,geni-uart";
 	status = "okay";
 };
 
 &usb {
 	status = "okay";
+};
+
+/* The Type-C port is wired for USB 2.0 only */
+&usb_dwc3 {
+	maximum-speed = "high-speed";
 };
 
 &usb_dwc3_hs {
@@ -462,6 +743,13 @@
 	remote-endpoint = <&pmi632_ss_in>;
 };
 
+&venus {
+	/* Samsung's signed firmware, VIDEO.VE.6.0-00049 */
+	firmware-name = "qcom/sm6115/Samsung/gta4l/venus.mbn";
+
+	status = "okay";
+};
+
 &wifi {
 	vdd-0.8-cx-mx-supply = <&pm6125_l8a>;
 	vdd-1.8-xo-supply = <&pm6125_l16a>;
@@ -475,14 +763,309 @@
 	clock-frequency = <19200000>;
 };
 
+/* Four FourSemi FS18xx amplifiers share the primary MI2S data line */
+&i2c1 {
+	clock-frequency = <400000>;
+
+	status = "okay";
+
+	speaker_amp: amplifier@36 {
+		compatible = "foursemi,fs18xx";
+		reg = <0x36>;
+		fsm,position = "LBTM";
+		#sound-dai-cells = <0>;
+	};
+
+	amplifier@35 {
+		compatible = "foursemi,fs18xx";
+		reg = <0x35>;
+		fsm,position = "LTOP";
+	};
+
+	amplifier@34 {
+		compatible = "foursemi,fs18xx";
+		reg = <0x34>;
+		fsm,position = "RTOP";
+	};
+
+	amplifier@37 {
+		compatible = "foursemi,fs18xx";
+		reg = <0x37>;
+		fsm,position = "RBTM";
+	};
+};
+
+&lpass_tlmm {
+	/*
+	 * Only the codec vote: the stock tree of this SoC votes nothing else
+	 * and the macro vote got no answer from the firmware.
+	 */
+	clocks = <&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+	clock-names = "audio";
+
+	lpass_tx_swr_active: lpass-tx-swr-active-state {
+		clk-pins {
+			pins = "gpio0";
+			function = "swr_tx_clk";
+			drive-strength = <10>;
+			slew-rate = <3>;
+			bias-disable;
+		};
+
+		data-pins {
+			pins = "gpio1", "gpio2";
+			function = "swr_tx_data";
+			drive-strength = <10>;
+			slew-rate = <3>;
+			bias-bus-hold;
+		};
+	};
+
+	lpass_rx_swr_active: lpass-rx-swr-active-state {
+		clk-pins {
+			pins = "gpio3";
+			function = "swr_rx_clk";
+			drive-strength = <10>;
+			slew-rate = <3>;
+			bias-disable;
+		};
+
+		data-pins {
+			pins = "gpio4", "gpio5";
+			function = "swr_rx_data";
+			drive-strength = <10>;
+			slew-rate = <3>;
+			bias-bus-hold;
+		};
+	};
+
+	lpi_i2s1_active: lpi-i2s1-active-state {
+		sck-pins {
+			pins = "gpio6";
+			function = "i2s1_clk";
+			bias-disable;
+			drive-strength = <8>;
+		};
+
+		ws-pins {
+			pins = "gpio7";
+			function = "i2s1_ws";
+			bias-disable;
+			drive-strength = <8>;
+		};
+
+		data-pins {
+			pins = "gpio8";
+			function = "i2s1_data";
+			bias-disable;
+			drive-strength = <8>;
+		};
+	};
+};
+
+&q6afedai {
+	dai@16 {
+		reg = <PRIMARY_MI2S_RX>;
+		qcom,sd-lines = <0>;
+	};
+};
+
 &soc {
 	/* Hack for passing bootloader checks */
 	spi@4a80000 {
 		reg = <0x0 0x04a80000 0x0 0x4000>;
 		status = "disabled";
 
+		/*
+		 * LinuxLoader looks up the node of the fitted panel's touch
+		 * vendor and stays in Download Mode if it is missing, so all
+		 * three stock candidates must exist.
+		 */
 		himax_ts@0 {
-		status = "disabled";
+			status = "disabled";
 		};
+
+		novatek@0 {
+			status = "disabled";
+		};
+
+		focaltech@0 {
+			status = "disabled";
+		};
+	};
+};
+
+/ {
+	/* Headphone jack and microphones */
+	wcd937x: audio-codec {
+		compatible = "qcom,wcd9370-codec";
+
+		pinctrl-0 = <&wcd_reset_n>;
+		pinctrl-names = "default";
+
+		/* stock: wcd937x_reset_active, gpio92 high = running */
+		reset-gpios = <&tlmm 92 GPIO_ACTIVE_LOW>;
+
+		vdd-buck-supply = <&pm6125_l14a>;
+		vdd-rxtx-supply = <&pm6125_l9a>;
+		vdd-px-supply = <&pm6125_l9a>;
+
+		/* stock: qcom,cdc-micbias*-mv = 2400 */
+		qcom,micbias1-microvolt = <2400000>;
+		qcom,micbias2-microvolt = <2400000>;
+		qcom,micbias3-microvolt = <2400000>;
+
+		/* stock: qcom,msm-mbhc-hphl-swh = 1, qcom,msm-mbhc-gnd-swh = 0 */
+		qcom,ground-jack-type-normally-closed;
+
+		/*
+		 * The driver default (1700 mV) is meant for a 1.8 V micbias; with
+		 * the 2.4 V micbias used here a headset mic reads 1.5-1.8 V and
+		 * was misreported as line-out. Scale it: 1700 * 2400 / 1800.
+		 */
+		qcom,mbhc-headset-vthreshold-microvolt = <2200000>;
+
+		qcom,rx-device = <&wcd937x_rx>;
+		qcom,tx-device = <&wcd937x_tx>;
+
+		#sound-dai-cells = <1>;
+	};
+};
+
+&soc {
+	/* LPASS codec blocks; addresses and interrupts from the stock tree */
+	lpass_rxmacro: codec@a600000 {
+		compatible = "qcom,sm6115-lpass-rx-macro";
+		reg = <0x0 0x0a600000 0x0 0x1000>;
+
+		clocks = <&q6afecc LPASS_CLK_ID_RX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_CLK_ID_RX_CORE_NPL_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&lpass_vamacro>;
+		clock-names = "mclk", "npl", "dcodec", "fsgen";
+
+		#clock-cells = <0>;
+		#sound-dai-cells = <1>;
+	};
+
+	swr1: soundwire@a610000 {
+		compatible = "qcom,soundwire-v1.6.0";
+		reg = <0x0 0x0a610000 0x0 0x2000>;
+		interrupts = <GIC_SPI 297 IRQ_TYPE_LEVEL_HIGH>;
+
+		pinctrl-0 = <&lpass_rx_swr_active>;
+		pinctrl-names = "default";
+
+		clocks = <&lpass_rxmacro>;
+		clock-names = "iface";
+
+		resets = <&lpass_audiocc LPASS_AUDIO_SWR_RX_CGCR>;
+		reset-names = "swr_audio_cgcr";
+
+		label = "RX";
+		qcom,din-ports = <0>;
+		qcom,dout-ports = <5>;
+
+		qcom,ports-word-length =	/bits/ 8 <0x01 0x07 0x04 0xff 0xff>;
+		qcom,ports-sinterval-low =	/bits/ 8 <0x03 0x3f 0x1f 0x03 0x03>;
+		qcom,ports-offset1 =		/bits/ 8 <0x00 0x00 0x0b 0x01 0x01>;
+		qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x0b 0x00 0x00>;
+		qcom,ports-lane-control =	/bits/ 8 <0x01 0x00 0x00 0x00 0x00>;
+		qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0x00 0x01 0xff 0xff>;
+		qcom,ports-hstart =		/bits/ 8 <0xff 0x03 0xff 0xff 0xff>;
+		qcom,ports-hstop =		/bits/ 8 <0xff 0x06 0xff 0xff 0xff>;
+		qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0xff 0x00>;
+
+		#sound-dai-cells = <1>;
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		wcd937x_rx: codec@0,4 {
+			compatible = "sdw20217010a00";
+			reg = <0 4>;
+			qcom,rx-port-mapping = <1 2 3 4 5>;
+			qcom,rx-channel-mapping = /bits/ 8 <1 2 1 1 2 1 1 2>;
+		};
+	};
+
+	lpass_txmacro: codec@a620000 {
+		compatible = "qcom,sm6115-lpass-tx-macro";
+		reg = <0x0 0x0a620000 0x0 0x1000>;
+
+		clocks = <&q6afecc LPASS_CLK_ID_TX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_CLK_ID_TX_CORE_NPL_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&lpass_vamacro>;
+		clock-names = "mclk", "npl", "dcodec", "fsgen";
+
+		#clock-cells = <0>;
+		#sound-dai-cells = <1>;
+	};
+
+	lpass_audiocc: clock-controller@a6a9000 {
+		compatible = "qcom,sm6115-lpassaudiocc";
+		reg = <0x0 0x0a6a9000 0x0 0x1000>;
+		#reset-cells = <1>;
+	};
+
+	lpass_vamacro: codec@a730000 {
+		compatible = "qcom,sm6115-lpass-va-macro";
+		reg = <0x0 0x0a730000 0x0 0x1000>;
+
+		clocks = <&q6afecc LPASS_CLK_ID_VA_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_CLK_ID_VA_CORE_2X_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "mclk", "dcodec", "npl";
+
+		#clock-cells = <0>;
+		clock-output-names = "fsgen";
+		#sound-dai-cells = <1>;
+	};
+
+	swr0: soundwire@a740000 {
+		compatible = "qcom,soundwire-v1.6.0";
+		reg = <0x0 0x0a740000 0x0 0x2000>;
+		interrupts = <GIC_SPI 296 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 79 IRQ_TYPE_LEVEL_HIGH>;
+
+		pinctrl-0 = <&lpass_tx_swr_active>;
+		pinctrl-names = "default";
+
+		clocks = <&lpass_vamacro>;
+		clock-names = "iface";
+
+		resets = <&lpasscc LPASS_SWR_TX_CONFIG_CGCR>;
+		reset-names = "swr_audio_cgcr";
+
+		label = "VA_TX";
+		qcom,din-ports = <3>;
+		qcom,dout-ports = <0>;
+
+		qcom,ports-sinterval-low =	/bits/ 8 <0x01 0x03 0x03>;
+		qcom,ports-offset1 =		/bits/ 8 <0x01 0x00 0x02>;
+		qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x00>;
+		qcom,ports-hstart =		/bits/ 8 <0xff 0xff 0xff>;
+		qcom,ports-hstop =		/bits/ 8 <0xff 0xff 0xff>;
+		qcom,ports-word-length =	/bits/ 8 <0xff 0x00 0xff>;
+		qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0xff 0xff>;
+		qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff>;
+		qcom,ports-lane-control =	/bits/ 8 <0x00 0x01 0x00>;
+
+		#sound-dai-cells = <1>;
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		wcd937x_tx: codec@0,3 {
+			compatible = "sdw20217010a00";
+			reg = <0 3>;
+			qcom,tx-port-mapping = <1 1 2 3>;
+			qcom,tx-channel-mapping = /bits/ 8 <1 2 1 1 2 3 3 4 1 2 3 4>;
+		};
+	};
+
+	lpasscc: clock-controller@a7ec000 {
+		compatible = "qcom,sm6115-lpasscc";
+		reg = <0x0 0x0a7ec000 0x0 0x1000>;
+		#reset-cells = <1>;
 	};
 };
