@@ -1135,7 +1135,7 @@ static const struct bw_tbl qcm2290_bw_table_enc[] = {
 };
 
 static const struct firmware_version min_fw = {
-	.major = 6, .minor = 0, .rev = 55,
+	.major = 6, .minor = 0, .rev = 49,
 };
 
 static const struct venus_resources qcm2290_res = {
