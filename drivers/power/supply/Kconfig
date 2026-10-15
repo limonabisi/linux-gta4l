@@ -208,6 +208,19 @@ config BATTERY_PMU
 	  Say Y here to expose battery information on Apple machines
 	  through the generic battery class.
 
+config BATTERY_QCOM_QG
+	tristate "Qualcomm QGauge read-only battery monitor"
+	depends on MFD_SPMI_PMIC
+	depends on IIO || !IIO
+	help
+	  Say Y here to report the battery voltage, current and an
+	  estimated charge level from the QGauge block of the Qualcomm
+	  PMI632 PMIC. The driver only reads from the PMIC; it does not
+	  control charging.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called qcom_qg.
+
 config BATTERY_QCOM_BATTMGR
 	tristate "Qualcomm PMIC GLINK battery manager support"
 	depends on QCOM_PMIC_GLINK

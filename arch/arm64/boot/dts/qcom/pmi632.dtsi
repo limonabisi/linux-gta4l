@@ -145,6 +145,15 @@
 			};
 		};
 
+		pmi632_qg: battery@4800 {
+			compatible = "qcom,pmi632-qg";
+			reg = <0x4800>;
+			io-channels = <&pmi632_adc ADC5_VBAT_SNS>,
+				      <&pmi632_adc ADC5_USB_IN_V_16>;
+			io-channel-names = "vbat", "usbin";
+			status = "disabled";
+		};
+
 		pmi632_adc_tm: adc-tm@3500 {
 			compatible = "qcom,spmi-adc-tm5";
 			reg = <0x3500>;
