@@ -97,6 +97,16 @@
 #define QG_SETTLE_DIV			16
 /* Do not show 0% while the voltage says there is still charge left */
 #define QG_EMPTY_ABOVE_VMIN_UV		100000
+/*
+ * Even an anchored count can be wrong: a value saved at an earlier clean
+ * shutdown is written back after a crash or a forced reboot. When the
+ * voltage estimate disagrees by more than QG_DRIFT_PCT on battery, at a load
+ * the estimate holds for, pull the count back until they agree within
+ * QG_DRIFT_DONE_PCT.
+ */
+#define QG_DRIFT_UA			1000000
+#define QG_DRIFT_PCT			25
+#define QG_DRIFT_DONE_PCT		5
 
 struct qcom_qg {
 	struct device *dev;
@@ -133,6 +143,8 @@ struct qcom_qg {
 	/* A full or empty point was seen since the other one: can learn */
 	bool full_seen;
 	bool empty_seen;
+	/* The count drifted away from the voltage and is being pulled back */
+	bool resyncing;
 	s64 charge_uah;
 	s64 full_uah;
 	s64 design_uah;
@@ -357,6 +369,28 @@ static void qcom_qg_update(struct qcom_qg *qg)
 		s64 target = div_s64((s64)qcom_qg_ocv_to_soc(qg, ocv) * qg->full_uah, 100);
 
 		qg->charge_uah += div_s64(target - qg->charge_uah, QG_SETTLE_DIV);
+	}
+
+	if (qg->anchored && usb <= 0 && abs(ibat) < QG_DRIFT_UA) {
+		int vsoc = qcom_qg_ocv_to_soc(qg, ocv);
+		int csoc = div_s64(clamp_t(s64, qg->charge_uah, 0, qg->full_uah) * 100,
+				   qg->full_uah);
+		int diff = abs(vsoc - csoc);
+
+		if (!qg->resyncing && diff > QG_DRIFT_PCT) {
+			dev_info(qg->dev, "count says %d%%, voltage %d%%: following the voltage\n",
+				 csoc, vsoc);
+			qg->resyncing = true;
+		}
+		if (qg->resyncing) {
+			s64 target = div_s64((s64)vsoc * qg->full_uah, 100);
+
+			qg->charge_uah += div_s64(target - qg->charge_uah, QG_SETTLE_DIV);
+			if (diff <= QG_DRIFT_DONE_PCT)
+				qg->resyncing = false;
+		}
+	} else {
+		qg->resyncing = false;
 	}
 
 	if (terminated) {
