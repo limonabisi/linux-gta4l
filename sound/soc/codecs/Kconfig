@@ -1339,6 +1339,14 @@ config SND_SOC_FS_AMP_LIB
 	select CRC16
 	tristate
 
+config SND_SOC_FS18XX
+	tristate "FourSemi FS18xx smart amplifiers (vendor driver)"
+	depends on I2C
+	help
+	  Vendor driver for groups of FourSemi FS1894/FS1818 class-D
+	  amplifiers that share one I2S stream, as found on the Samsung
+	  Galaxy Tab A7. Needs the fs18xx.fsm tuning file of the device.
+
 config SND_SOC_FS210X
 	tristate 'FourSemi FS2104/5S digital audio amplifier'
 	depends on I2C
