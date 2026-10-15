@@ -208,6 +208,20 @@ config BATTERY_PMU
 	  Say Y here to expose battery information on Apple machines
 	  through the generic battery class.
 
+config CHARGER_PMI632_WDOG
+	tristate "Qualcomm PMI632 charger watchdog keeper"
+	depends on SPMI && OF
+	depends on ARCH_QCOM || COMPILE_TEST
+	help
+	  The boot firmware of some PMI632 devices, such as the Samsung
+	  Galaxy Tab A7 10.4 (2020), arms the charger watchdog on every
+	  cable insertion and lets it switch charging off. Until a real
+	  PMI632 charger driver exists, this keeps petting the watchdog
+	  and raises the input limit for wall chargers to 1.5 A.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called pmi632-chg-wdog.
+
 config BATTERY_QCOM_QG
 	tristate "Qualcomm QGauge read-only battery monitor"
 	depends on MFD_SPMI_PMIC
